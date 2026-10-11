@@ -132,24 +132,18 @@ jobs:
         working-directory: glslang
         run: python update_glslang_sources.py
 
-      - name: Configure static MSVC runtime
-        shell: pwsh
-        run: |
-          @'
-          set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP/msvc-static-runtime.cmake" -Encoding utf8
-
       - name: Build
         shell: pwsh
         run: |
+          $msvcRuntime = if ("${{ matrix.cmake_build_type }}" -eq "Debug") { "MultiThreadedDebug" } else { "MultiThreaded" }
           cmake `
-            -Sglslang `
-            -Bbuild `
+            -S glslang `
+            -B build `
             -G "Visual Studio 17 2022" `
             -A ${{ matrix.arch_msvc }} `
             -DCMAKE_INSTALL_PREFIX="\$PWD/build/install" `
             -DSPIRV_SKIP_EXECUTABLES=ON `
-            "-DCMAKE_TOOLCHAIN_FILE=\$env:RUNNER_TEMP/msvc-static-runtime.cmake"
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=\$msvcRuntime
           cmake --build build --config \${{ matrix.cmake_build_type }} --target install
 
       # Cross-compiled ARM64 binaries cannot execute on x86_64 runner instances
