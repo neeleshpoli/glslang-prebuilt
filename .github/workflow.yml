@@ -1,0 +1,226 @@
+name: Build glslang
+
+run-name: Build glslang at ${{ inputs.commit_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_id:
+        description: glslang commit ID
+        required: true
+        type: string
+
+permissions: read-all
+
+jobs:
+  resolve:
+    name: Resolve commit
+    runs-on: ubuntu-22.04
+    outputs:
+      commit_sha: ${{ steps.commit.outputs.commit_sha }}
+      short_sha: ${{ steps.commit.outputs.short_sha }}
+    steps:
+      - name: Clone glslang
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: KhronosGroup/glslang
+          ref: ${{ inputs.commit_id }}
+          path: glslang
+          fetch-depth: 1
+
+      - name: Resolve commit ID
+        id: commit
+        shell: bash
+        run: |
+          COMMIT_SHA="$(git -C glslang rev-parse HEAD)"
+          echo "commit_sha=${COMMIT_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "short_sha=${COMMIT_SHA:0:6}" >> "${GITHUB_OUTPUT}"
+
+  linux:
+    name: Linux ${{ matrix.cmake_build_type }}
+    needs: resolve
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cmake_build_type: [Debug, Release]
+        include:
+          - cmake_build_type: Debug
+            cmake_build_type_lower: debug
+          - cmake_build_type: Release
+            cmake_build_type_lower: release
+    steps:
+      - name: Clone glslang
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: KhronosGroup/glslang
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+          path: glslang
+          fetch-depth: 1
+
+      - name: Update glslang sources
+        working-directory: glslang
+        run: ./update_glslang_sources.py
+
+      - name: Build
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          mkdir build && cd build
+          cmake \
+            -DCMAKE_BUILD_TYPE=${{ matrix.cmake_build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$(pwd)/install" \
+            -DSPIRV_SKIP_EXECUTABLES=ON \
+            ../glslang
+          make -j4 install
+
+      - name: Test
+        run: |
+          cd build
+          ctest --output-on-failure
+
+      - name: Package
+        shell: bash
+        env:
+          BUILD_TYPE_LOWER: ${{ matrix.cmake_build_type_lower }}
+        run: |
+          cd build/install
+          ARCHIVE_BASE="glslang-linux-${BUILD_TYPE_LOWER}"
+          if ! compgen -G "lib/*.a" > /dev/null; then
+            echo "No static libraries were installed in lib/." >&2
+            exit 1
+          fi
+          zip "${ARCHIVE_BASE}.zip" lib/*.a
+
+      - name: Upload archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: glslang-linux-${{ matrix.cmake_build_type_lower }}
+          path: build/install/glslang-linux-${{ matrix.cmake_build_type_lower }}.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  windows:
+    name: Windows ${{ matrix.arch }} ${{ matrix.cmake_build_type }}
+    needs: resolve
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        cmake_build_type: [Debug, Release]
+        arch: [x64, arm64]
+        include:
+          - cmake_build_type: Debug
+            cmake_build_type_lower: debug
+          - cmake_build_type: Release
+            cmake_build_type_lower: release
+          - arch: x64
+            arch_msvc: x64
+          - arch: arm64
+            arch_msvc: ARM64
+    steps:
+      - name: Clone glslang
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: KhronosGroup/glslang
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+          path: glslang
+          fetch-depth: 1
+
+      - name: Update glslang sources
+        working-directory: glslang
+        run: python update_glslang_sources.py
+
+      - name: Configure static MSVC runtime
+        shell: pwsh
+        run: |
+          @'
+          set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP/msvc-static-runtime.cmake" -Encoding utf8
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake `
+            -Sglslang `
+            -Bbuild `
+            -G "Visual Studio 17 2022" `
+            -A ${{ matrix.arch_msvc }} `
+            -DCMAKE_INSTALL_PREFIX="\$PWD/build/install" `
+            -DSPIRV_SKIP_EXECUTABLES=ON `
+            "-DCMAKE_TOOLCHAIN_FILE=\$env:RUNNER_TEMP/msvc-static-runtime.cmake"
+          cmake --build build --config \${{ matrix.cmake_build_type }} --target install
+
+      # Cross-compiled ARM64 binaries cannot execute on x86_64 runner instances
+      - name: Test
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          Set-Location build
+          ctest -C \${{ matrix.cmake_build_type }} --output-on-failure
+
+      - name: Package
+        shell: bash
+        env:
+          BUILD_TYPE_LOWER: \${{ matrix.cmake_build_type_lower }}
+          ARCH: \${{ matrix.arch }}
+        run: |
+          cd build/install
+          ARCHIVE_BASE="glslang-windows-${ARCH}-${BUILD_TYPE_LOWER}"
+          shopt -s nullglob
+          LIBRARIES=(lib/*.lib)
+          if (( \${#LIBRARIES[@]} == 0 )); then
+            echo "No static libraries were installed in lib/." >&2
+            exit 1
+          fi
+          7z a "${ARCHIVE_BASE}.zip" "${LIBRARIES[@]}"
+
+      - name: Upload archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: glslang-windows-${{ matrix.arch }}-${{ matrix.cmake_build_type_lower }}
+          path: build/install/glslang-windows-${{ matrix.arch }}-${{ matrix.cmake_build_type_lower }}.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Release \${{ needs.resolve.outputs.short_sha }}
+    needs: [resolve, linux, windows]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: glslang-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify archives
+        shell: bash
+        run: |
+          EXPECTED=(
+            glslang-linux-debug.zip
+            glslang-linux-release.zip
+            glslang-windows-x64-debug.zip
+            glslang-windows-x64-release.zip
+            glslang-windows-arm64-debug.zip
+            glslang-windows-arm64-release.zip
+          )
+          for ARCHIVE in "\${EXPECTED[@]}"; do
+            test -f "release-assets/\${ARCHIVE}"
+          done
+          test "\$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 6
+
+      - name: Publish release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        with:
+          tag_name: \${{ needs.resolve.outputs.short_sha }}
+          name: \${{ needs.resolve.outputs.short_sha }}
+          target_commitish: \${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: release-assets/*.zip
+          body: |
+            glslang commit: \${{ needs.resolve.outputs.commit_sha }}
