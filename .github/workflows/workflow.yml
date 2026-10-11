@@ -191,12 +191,12 @@ jobs:
           echo "All 6 archives successfully verified."
 
       - name: Publish release
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: \${{ needs.resolve.outputs.short_sha }}
-          name: \${{ needs.resolve.outputs.short_sha }}
-          target_commitish: \${{ github.sha }}
+          tag_name: ${{ needs.resolve.outputs.short_sha }}
+          name: ${{ needs.resolve.outputs.short_sha }}
+          target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true
           files: release-assets/*.zip
           body: |
-            glslang commit: \${{ needs.resolve.outputs.commit_sha }}
+            glslang commit: ${{ needs.resolve.outputs.commit_sha }}
