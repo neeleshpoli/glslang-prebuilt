@@ -157,7 +157,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Release \${{ needs.resolve.outputs.short_sha }}
+    name: Release ${{ needs.resolve.outputs.short_sha }}
     needs: [resolve, linux, windows]
     runs-on: ubuntu-22.04
     permissions:
@@ -173,6 +173,7 @@ jobs:
       - name: Verify archives
         shell: bash
         run: |
+          ls -la release-assets
           EXPECTED=(
             glslang-linux-debug.zip
             glslang-linux-release.zip
@@ -181,10 +182,13 @@ jobs:
             glslang-windows-arm64-debug.zip
             glslang-windows-arm64-release.zip
           )
-          for ARCHIVE in "\${EXPECTED[@]}"; do
-            test -f "release-assets/\${ARCHIVE}"
+          for ARCHIVE in "${EXPECTED[@]}"; do
+            if [ ! -f "release-assets/${ARCHIVE}" ]; then
+              echo "Missing expected archive: release-assets/${ARCHIVE}" >&2
+              exit 1
+            fi
           done
-          test "\$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 6
+          echo "All 6 archives successfully verified."
 
       - name: Publish release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
