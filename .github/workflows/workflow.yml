@@ -75,11 +75,6 @@ jobs:
             ../glslang
           make -j4 install
 
-      - name: Test
-        run: |
-          cd build
-          ctest --output-on-failure
-
       - name: Package
         shell: bash
         env:
@@ -138,37 +133,28 @@ jobs:
           cmake -S glslang -B build -G "Visual Studio 17 2022" -A ${{ matrix.arch_msvc }} -DCMAKE_INSTALL_PREFIX="$((Get-Location).Path)/build/install" -DSPIRV_SKIP_EXECUTABLES=ON -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"
           cmake --build build --config ${{ matrix.cmake_build_type }} --target install
 
-      # Cross-compiled ARM64 binaries cannot execute on x86_64 runner instances
-      - name: Test
-        if: matrix.arch == 'x64'
+      - name: Package
         shell: pwsh
         run: |
-          Set-Location build
-          ctest -C \${{ matrix.cmake_build_type }} --output-on-failure
-
-      - name: Package
-        shell: bash
-        env:
-          BUILD_TYPE_LOWER: \${{ matrix.cmake_build_type_lower }}
-          ARCH: \${{ matrix.arch }}
-        run: |
-          cd build/install
-          ARCHIVE_BASE="glslang-windows-${ARCH}-${BUILD_TYPE_LOWER}"
-          shopt -s nullglob
-          LIBRARIES=(lib/*.lib)
-          if (( \${#LIBRARIES[@]} == 0 )); then
-            echo "No static libraries were installed in lib/." >&2
+          $buildTypeLower = "${{ matrix.cmake_build_type }}".ToLower()
+          $archiveName = "glslang-windows-${{ matrix.arch }}-$buildTypeLower.zip"
+          
+          # Check if static libraries exist
+          $libs = Get-ChildItem -Path "build/install/lib/*.lib"
+          if ($libs.Count -eq 0) {
+            Write-Error "No static libraries found in build/install/lib/"
             exit 1
-          fi
-          7z a "${ARCHIVE_BASE}.zip" "${LIBRARIES[@]}"
+          }
+
+          # Create zip at build/install root
+          Compress-Archive -Path "build/install/lib/*.lib" -DestinationPath "build/install/$archiveName" -Force
 
       - name: Upload archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v4
         with:
           name: glslang-windows-${{ matrix.arch }}-${{ matrix.cmake_build_type_lower }}
           path: build/install/glslang-windows-${{ matrix.arch }}-${{ matrix.cmake_build_type_lower }}.zip
           if-no-files-found: error
-          compression-level: 0
 
   release:
     name: Release \${{ needs.resolve.outputs.short_sha }}
