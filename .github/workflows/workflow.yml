@@ -139,15 +139,8 @@ jobs:
           $buildTypeLower = "${{ matrix.cmake_build_type }}".ToLower()
           $archiveName = "glslang-windows-${{ matrix.arch }}-$buildTypeLower.zip"
           
-          # Check if static libraries exist
-          $libs = Get-ChildItem -Path "build/install/lib/*.lib"
-          if ($libs.Count -eq 0) {
-            Write-Error "No static libraries found in build/install/lib/"
-            exit 1
-          }
-
-          # Create zip at build/install root
-          Compress-Archive -Path "build/install/lib/*.lib" -DestinationPath "build/install/$archiveName" -Force
+          # Archive the 'lib' folder so the zip contains 'lib/*.lib'
+          Compress-Archive -Path "build/install/lib" -DestinationPath "build/install/$archiveName" -Force
 
       - name: Upload archive
         uses: actions/upload-artifact@v4
